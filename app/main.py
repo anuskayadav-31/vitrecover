@@ -2,67 +2,25 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-import hashlib, os, hmac
-import sqlite3
+import hashlib, os, hmac, sqlite3
 from pathlib import Path
+from datetime import date
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "vitrecover.db"
 app = FastAPI(title="VITRecover")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
+
 LOCATIONS = [
-    "SJT",
-    "TT",
-    "PRP",
-    "SMV",
-    "MB",
-    "GDN",
-    "CDMM",
-    "LH-A",
-    "LH-B",
-    "LH-C",
-    "LH-D",
-    "LH-E",
-    "LH-F",
-    "LH-G",
-    "LH-H",
-    "LH-I",
-    "LH-J",
-    "MH-A",
-    "MH-B",
-    "MH-C",
-    "MH-D",
-    "MH-E",
-    "MH-F",
-    "MH-G",
-    "MH-H",
-    "MH-I",
-    "MH-J",
-    "MH-K",
-    "MH-L",
-    "MH-M",
-    "MH-N",
-    "MH-O",
-    "MH-P",
-    "MH-Q",
-    "MH-R",
-    "MH-S",
-    "MH-T",
-    "Gazebo",
-    "Food Mall",
-    "DC",
-    "Central Library",
-    "Sports Complex",
+    "SJT", "TT", "PRP", "SMV", "MB", "GDN", "CDMM",
+    "LH-A", "LH-B", "LH-C", "LH-D", "LH-E", "LH-F", "LH-G", "LH-H", "LH-I", "LH-J",
+    "MH-A", "MH-B", "MH-C", "MH-D", "MH-E", "MH-F", "MH-G", "MH-H", "MH-I", "MH-J",
+    "MH-K", "MH-L", "MH-M", "MH-N", "MH-O", "MH-P", "MH-Q", "MH-R", "MH-S", "MH-T",
+    "Gazebo", "Food Mall", "DC", "Central Library", "Sports Complex"
 ]
-CATEGORIES = [
-    "ID Cards",
-    "Room Keys",
-    "Calculators",
-    "Lab Equipment",
-    "Earphones",
-    "Wallets",
-]
+CATEGORIES = ["ID Cards", "Room Keys", "Calculators", "Lab Equipment", "Earphones", "Wallets", "Other"]
 
 
 def hash_password(password):
@@ -72,120 +30,137 @@ def hash_password(password):
 
 
 def verify_password(password, stored):
-    salt_hex, digest_hex = stored.split(":", 1)
-    digest = hashlib.scrypt(
-        password.encode(), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1
-    )
-    return hmac.compare_digest(digest.hex(), digest_hex)
+    try:
+        salt_hex, digest_hex = stored.split(":", 1)
+        digest = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1)
+        return hmac.compare_digest(digest.hex(), digest_hex)
+    except Exception:
+        return False
 
 
 def db():
     con = sqlite3.connect(DB)
     con.row_factory = sqlite3.Row
     con.executescript(
-        """CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, regno TEXT UNIQUE, email TEXT UNIQUE, name TEXT, password TEXT);
-    CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY, owner_id INTEGER, kind TEXT, title TEXT, description TEXT, location TEXT, category TEXT, challenge TEXT, answer TEXT, status TEXT DEFAULT 'ACTIVE');
-    CREATE TABLE IF NOT EXISTS claims(id INTEGER PRIMARY KEY, item_id INTEGER, claimant_id INTEGER, response TEXT, status TEXT DEFAULT 'PENDING');
-    CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, claim_id INTEGER, sender_id INTEGER, body TEXT);
-    """
+        """CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY, regno TEXT UNIQUE, email TEXT UNIQUE, name TEXT, password TEXT
+        );
+        CREATE TABLE IF NOT EXISTS items(
+            id INTEGER PRIMARY KEY, owner_id INTEGER, kind TEXT, title TEXT, description TEXT,
+            location TEXT, category TEXT, challenge TEXT, answer TEXT,
+            reported_date TEXT, status TEXT DEFAULT 'ACTIVE'
+        );
+        CREATE TABLE IF NOT EXISTS claims(
+            id INTEGER PRIMARY KEY, item_id INTEGER, claimant_id INTEGER,
+            response TEXT, status TEXT DEFAULT 'PENDING'
+        );
+        CREATE TABLE IF NOT EXISTS messages(
+            id INTEGER PRIMARY KEY, claim_id INTEGER, sender_id INTEGER, body TEXT
+        );
+        """
     )
+    # Backward-compatible migration for the original database.
+    cols = {r[1] for r in con.execute("PRAGMA table_info(items)").fetchall()}
+    if "reported_date" not in cols:
+        con.execute("ALTER TABLE items ADD COLUMN reported_date TEXT")
+        con.execute("UPDATE items SET reported_date=? WHERE reported_date IS NULL", (date.today().isoformat(),))
+        con.commit()
     return con
 
 
 @app.on_event("startup")
 def init():
-    db().close()
+    con = db()
+    con.close()
 
 
 def current_user(request):
     return request.cookies.get("user_id")
 
 
-def user(id):
-    if not id:
+def user(uid):
+    if not uid:
         return None
     con = db()
-    u = con.execute("SELECT * FROM users WHERE id=?", (id,)).fetchone()
+    u = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     con.close()
     return u
 
 
+def render(request, name, **context):
+    context.setdefault("user", user(current_user(request)))
+    context.setdefault("today", date.today().isoformat())
+    return templates.TemplateResponse(request=request, name=name, context=context)
+
+
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request):
+def home(request: Request, q: str = "", kind: str = "", category: str = "", location: str = ""):
     con = db()
-    items = con.execute(
-        "SELECT * FROM items WHERE status IN ('ACTIVE', 'CLAIM_APPROVED') ORDER BY id DESC"
-    ).fetchall()
+    sql = "SELECT * FROM items WHERE status IN ('ACTIVE','CLAIM_APPROVED')"
+    params = []
+    if q.strip():
+        sql += " AND (title LIKE ? OR description LIKE ?)"
+        term = f"%{q.strip()}%"
+        params += [term, term]
+    if kind in ("LOST", "FOUND"):
+        sql += " AND kind=?"; params.append(kind)
+    if category in CATEGORIES:
+        sql += " AND category=?"; params.append(category)
+    if location in LOCATIONS:
+        sql += " AND location=?"; params.append(location)
+    sql += " ORDER BY id DESC"
+    items = con.execute(sql, params).fetchall()
     con.close()
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html",
-        context={
-            "items": items,
-            "user": user(current_user(request)),
-            "locations": LOCATIONS,
-            "categories": CATEGORIES,
-        },
-    )
+    return render(request, "index.html", items=items, locations=LOCATIONS, categories=CATEGORIES,
+                  q=q, kind=kind, category=category, location=location)
+
+
+@app.get("/items/{item_id}", response_class=HTMLResponse)
+def item_details(request: Request, item_id: int):
+    con = db()
+    item = con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+    con.close()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    return render(request, "details.html", item=item)
 
 
 @app.get("/register", response_class=HTMLResponse)
 def register_page(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="register.html",
-        context={},
-    )
+    return render(request, "register.html", error=request.query_params.get("error"))
 
 
 @app.post("/register")
-def register(
-    regno: str = Form(...),
-    email: str = Form(...),
-    name: str = Form(...),
-    password: str = Form(...),
-):
+def register(regno: str = Form(...), email: str = Form(...), name: str = Form(...), password: str = Form(...)):
     if "@" not in email or len(password) < 6:
-        raise HTTPException(
-            400, "Use a valid email and a password of at least 6 characters."
-        )
+        return RedirectResponse("/register?error=" + quote("Use a valid email and a password of at least 6 characters."), 303)
     con = db()
     try:
-        con.execute(
-            "INSERT INTO users(regno,email,name,password) VALUES(?,?,?,?)",
-            (
-                regno.strip(),
-                email.lower().strip(),
-                name.strip(),
-                hash_password(password),
-            ),
-        )
+        con.execute("INSERT INTO users(regno,email,name,password) VALUES(?,?,?,?)",
+                    (regno.strip(), email.lower().strip(), name.strip(), hash_password(password)))
         con.commit()
     except sqlite3.IntegrityError:
-        raise HTTPException(400, "Registration number or email already exists.")
+        con.close()
+        return RedirectResponse("/register?error=" + quote("Registration number or email already exists."), 303)
     con.close()
     return RedirectResponse("/login", 303)
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="login.html",
-        context={},
-    )
+def login_page(request: Request, next: str = "/"):
+    return render(request, "login.html", next=next, error=request.query_params.get("error"))
 
 
 @app.post("/login")
-def login(email: str = Form(...), password: str = Form(...)):
+def login(email: str = Form(...), password: str = Form(...), next: str = Form("/")):
     con = db()
-    u = con.execute(
-        "SELECT * FROM users WHERE email=?", (email.lower().strip(),)
-    ).fetchone()
+    u = con.execute("SELECT * FROM users WHERE email=?", (email.lower().strip(),)).fetchone()
     con.close()
     if not u or not verify_password(password, u["password"]):
-        raise HTTPException(401, "Invalid credentials")
-    r = RedirectResponse("/", 303)
+        safe_next = next if next.startswith("/") else "/"
+        return RedirectResponse("/login?next=" + quote(safe_next, safe="/") + "&error=" + quote("Invalid email or password."), 303)
+    safe_next = next if next.startswith("/") else "/"
+    r = RedirectResponse(safe_next, 303)
     r.set_cookie("user_id", str(u["id"]), httponly=True, samesite="lax")
     return r
 
@@ -197,268 +172,149 @@ def logout():
     return r
 
 
+@app.get("/report", response_class=HTMLResponse)
+def report_page(request: Request, kind: str = "LOST"):
+    if not current_user(request):
+        return RedirectResponse("/login?next=" + quote("/report?kind=" + kind, safe="/?="), 303)
+    kind = kind if kind in ("LOST", "FOUND") else "LOST"
+    return render(request, "report.html", kind=kind, locations=LOCATIONS, categories=CATEGORIES)
+
+
 @app.post("/items")
 def create_item(
     request: Request,
-    kind: str = Form(...),
-    title: str = Form(...),
-    description: str = Form(...),
-    location: str = Form(...),
-    category: str = Form(...),
-    challenge: str = Form(...),
-    answer: str = Form(...),
+    kind: str = Form(...), title: str = Form(...), description: str = Form(...),
+    location: str = Form(...), category: str = Form(...), reported_date: str = Form(...),
+    challenge: str = Form(""), answer: str = Form("")
 ):
-    u = current_user(request)
-    if not u:
-        raise HTTPException(401, "Login required")
-    if (
-        location not in LOCATIONS
-        or category not in CATEGORIES
-        or kind not in ["LOST", "FOUND"]
-    ):
+    uid = current_user(request)
+    if not uid:
+        return RedirectResponse("/login?next=/report", 303)
+    if location not in LOCATIONS or category not in CATEGORIES or kind not in ("LOST", "FOUND"):
         raise HTTPException(400, "Invalid listing data")
+    try:
+        d = date.fromisoformat(reported_date)
+    except ValueError:
+        raise HTTPException(400, "Invalid date")
+    if d > date.today():
+        raise HTTPException(400, "Reported date cannot be in the future")
+    if not title.strip() or not description.strip():
+        raise HTTPException(400, "Title and description are required")
+    if kind == "FOUND" and (not challenge.strip() or not answer.strip()):
+        raise HTTPException(400, "A private verification question and answer are required for found items")
+    if kind == "LOST":
+        challenge, answer = "", ""
     con = db()
     con.execute(
-        "INSERT INTO items(owner_id,kind,title,description,location,category,challenge,answer) VALUES(?,?,?,?,?,?,?,?)",
-        (
-            u,
-            kind,
-            title,
-            description,
-            location,
-            category,
-            challenge,
-            answer.lower().strip(),
-        ),
+        "INSERT INTO items(owner_id,kind,title,description,location,category,challenge,answer,reported_date) VALUES(?,?,?,?,?,?,?,?,?)",
+        (uid, kind, title.strip(), description.strip(), location, category, challenge.strip(), answer.lower().strip(), reported_date),
     )
-    con.commit()
-    con.close()
-    return RedirectResponse("/", 303)
+    con.commit(); con.close()
+    return RedirectResponse("/dashboard", 303)
+
+
+@app.get("/claim/{item_id}", response_class=HTMLResponse)
+def claim_page(request: Request, item_id: int):
+    if not current_user(request):
+        return RedirectResponse("/login?next=" + quote(f"/claim/{item_id}", safe="/"), 303)
+    con = db(); item = con.execute("SELECT * FROM items WHERE id=? AND status='ACTIVE'", (item_id,)).fetchone(); con.close()
+    if not item:
+        raise HTTPException(404, "This item is no longer claimable")
+    if item["owner_id"] == int(current_user(request)):
+        return RedirectResponse(f"/items/{item_id}", 303)
+    return render(request, "claim.html", item=item)
 
 
 @app.post("/claim/{item_id}")
 def claim(request: Request, item_id: int, response: str = Form(...)):
-    u = current_user(request)
-    if not u:
-        raise HTTPException(401, "Login required")
+    uid = current_user(request)
+    if not uid:
+        return RedirectResponse("/login?next=" + quote(f"/claim/{item_id}", safe="/"), 303)
     con = db()
-    item = con.execute(
-        "SELECT * FROM items WHERE id=? AND status='ACTIVE'", (item_id,)
-    ).fetchone()
-    if not item or item["owner_id"] == int(u):
-        raise HTTPException(400, "Invalid claim")
-    con.execute(
-        "INSERT INTO claims(item_id,claimant_id,response) VALUES(?,?,?)",
-        (item_id, u, response.strip()),
-    )
-    con.commit()
-    con.close()
-    return RedirectResponse("/", 303)
+    item = con.execute("SELECT * FROM items WHERE id=? AND status='ACTIVE'", (item_id,)).fetchone()
+    if not item or item["owner_id"] == int(uid):
+        con.close(); raise HTTPException(400, "Invalid claim")
+    existing = con.execute("SELECT 1 FROM claims WHERE item_id=? AND claimant_id=? AND status='PENDING'", (item_id, uid)).fetchone()
+    if existing:
+        con.close(); return RedirectResponse("/dashboard", 303)
+    con.execute("INSERT INTO claims(item_id,claimant_id,response) VALUES(?,?,?)", (item_id, uid, response.strip()))
+    con.commit(); con.close()
+    return RedirectResponse("/dashboard", 303)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request):
-    u = current_user(request)
-    if not u:
-        return RedirectResponse("/login", 303)
+    uid = current_user(request)
+    if not uid:
+        return RedirectResponse("/login?next=/dashboard", 303)
     con = db()
-    claims = con.execute(
-        "SELECT c.*,i.title,i.challenge,i.answer,i.owner_id FROM claims c JOIN items i ON i.id=c.item_id WHERE i.owner_id=? ORDER BY c.id DESC",
-        (u,),
+    claims_for_owner = con.execute(
+        "SELECT c.*,i.title,i.challenge,i.answer,i.owner_id,i.kind,i.location,i.status item_status FROM claims c JOIN items i ON i.id=c.item_id WHERE i.owner_id=? ORDER BY c.id DESC", (uid,)
     ).fetchall()
-    approved_claims = con.execute(
-        """
-    SELECT
-        c.*,
-        i.title,
-        i.owner_id
-    FROM claims c
-    JOIN items i ON i.id = c.item_id
-    WHERE c.claimant_id = ?
-      AND c.status = 'APPROVED'
-    ORDER BY c.id DESC
-    """,
-        (u,),
+    submitted = con.execute(
+        "SELECT c.*,i.title,i.kind,i.location,i.status item_status FROM claims c JOIN items i ON i.id=c.item_id WHERE c.claimant_id=? ORDER BY c.id DESC", (uid,)
     ).fetchall()
-    own = con.execute(
-        "SELECT * FROM items WHERE owner_id=? ORDER BY id DESC", (u,)
-    ).fetchall()
+    own = con.execute("SELECT * FROM items WHERE owner_id=? ORDER BY id DESC", (uid,)).fetchall()
     con.close()
-    return templates.TemplateResponse(
-        request=request,
-        name="dashboard.html",
-        context={
-            "claims": claims,
-            "approved_claims": approved_claims,
-            "own": own,
-            "user": user(u),
-        },
-    )
+    pending = [c for c in claims_for_owner if c["status"] == "PENDING"]
+    approved_owner = [c for c in claims_for_owner if c["status"] == "APPROVED"]
+    return render(request, "dashboard.html", own=own, pending=pending, approved_owner=approved_owner, submitted=submitted)
 
 
 @app.post("/claims/{claim_id}/{decision}")
 def decide(request: Request, claim_id: int, decision: str):
-    u = current_user(request)
-    if not u or decision not in ["APPROVED", "REJECTED"]:
+    uid = current_user(request)
+    if not uid or decision not in ("APPROVED", "REJECTED"):
         raise HTTPException(400, "Invalid request")
     con = db()
-    claim = con.execute(
-        "SELECT c.*,i.owner_id,i.id item_id FROM claims c JOIN items i ON i.id=c.item_id WHERE c.id=?",
-        (claim_id,),
-    ).fetchone()
-    if not claim or claim["owner_id"] != int(u):
-        raise HTTPException(403, "Only the finder can decide")
+    claim = con.execute("SELECT c.*,i.owner_id,i.id item_id FROM claims c JOIN items i ON i.id=c.item_id WHERE c.id=?", (claim_id,)).fetchone()
+    if not claim or claim["owner_id"] != int(uid):
+        con.close(); raise HTTPException(403, "Only the finder can decide")
     con.execute("UPDATE claims SET status=? WHERE id=?", (decision, claim_id))
     if decision == "APPROVED":
-        con.execute(
-            "UPDATE items SET status='CLAIM_APPROVED' WHERE id=?", (claim["item_id"],)
-        )
-    con.commit()
-    con.close()
+        con.execute("UPDATE items SET status='CLAIM_APPROVED' WHERE id=?", (claim["item_id"],))
+    con.commit(); con.close()
     return RedirectResponse("/dashboard", 303)
 
 
 @app.post("/resolve/{item_id}")
 def resolve(request: Request, item_id: int):
-    u = current_user(request)
-    if not u:
-        raise HTTPException(401, "Login required")
-    con = db()
-    item = con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
-    if not item:
-        raise HTTPException(404, "Item not found")
-    # Owner can resolve; approved claimant can also resolve.
-    approved = con.execute(
-        "SELECT 1 FROM claims WHERE item_id=? AND claimant_id=? AND status='APPROVED'",
-        (item_id, u),
-    ).fetchone()
-    if item["owner_id"] != int(u) and not approved:
-        raise HTTPException(403, "Not authorized")
-    con.execute("UPDATE items SET status='RESOLVED' WHERE id=?", (item_id,))
-    con.commit()
-    con.close()
+    uid = current_user(request)
+    if not uid: return RedirectResponse("/login?next=/dashboard", 303)
+    con = db(); item = con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+    if not item: con.close(); raise HTTPException(404, "Item not found")
+    approved = con.execute("SELECT 1 FROM claims WHERE item_id=? AND claimant_id=? AND status='APPROVED'", (item_id, uid)).fetchone()
+    if item["owner_id"] != int(uid) and not approved:
+        con.close(); raise HTTPException(403, "Not authorized")
+    con.execute("UPDATE items SET status='RESOLVED' WHERE id=?", (item_id,)); con.commit(); con.close()
     return RedirectResponse("/dashboard", 303)
 
 
 @app.get("/messages/{claim_id}", response_class=HTMLResponse)
 def messages_page(request: Request, claim_id: int):
     current = current_user(request)
-    if not current:
-        return RedirectResponse("/login", 303)
-
-    current_id = int(current)
-    con = db()
-
-    claim = con.execute(
-        """
-        SELECT
-            c.id,
-            c.item_id,
-            c.claimant_id,
-            c.status,
-            i.title,
-            i.owner_id
-        FROM claims c
-        JOIN items i ON i.id = c.item_id
-        WHERE c.id = ?
-        """,
-        (claim_id,),
-    ).fetchone()
-
-    if not claim:
-        con.close()
-        raise HTTPException(404, "Claim not found")
-
-    # Only the finder/owner or the approved claimant can access
-    # the private conversation.
-    if claim["status"] != "APPROVED":
-        con.close()
-        raise HTTPException(403, "Messaging is available only after claim approval")
-
-    if current_id not in (claim["owner_id"], claim["claimant_id"]):
-        con.close()
-        raise HTTPException(403, "You are not part of this conversation")
-
-    messages = con.execute(
-        """
-        SELECT id, sender_id, body
-        FROM messages
-        WHERE claim_id = ?
-        ORDER BY id ASC
-        """,
-        (claim_id,),
-    ).fetchall()
-
+    if not current: return RedirectResponse("/login?next=" + quote(f"/messages/{claim_id}", safe="/"), 303)
+    current_id = int(current); con = db()
+    claim = con.execute("SELECT c.id,c.item_id,c.claimant_id,c.status,i.title,i.owner_id FROM claims c JOIN items i ON i.id=c.item_id WHERE c.id=?", (claim_id,)).fetchone()
+    if not claim: con.close(); raise HTTPException(404, "Claim not found")
+    if claim["status"] != "APPROVED": con.close(); raise HTTPException(403, "Messaging is available only after claim approval")
+    if current_id not in (claim["owner_id"], claim["claimant_id"]): con.close(); raise HTTPException(403, "You are not part of this conversation")
+    messages = con.execute("SELECT id,sender_id,body FROM messages WHERE claim_id=? ORDER BY id ASC", (claim_id,)).fetchall()
     con.close()
-
-    return templates.TemplateResponse(
-        request=request,
-        name="messages.html",
-        context={
-            "claim": claim,
-            "messages": messages,
-            "current_user_id": current_id,
-            "user": user(current_id),
-        },
-    )
+    return render(request, "messages.html", claim=claim, messages=messages, current_user_id=current_id)
 
 
 @app.post("/messages/{claim_id}")
-def send_message(
-    request: Request,
-    claim_id: int,
-    body: str = Form(...),
-):
+def send_message(request: Request, claim_id: int, body: str = Form(...)):
     current = current_user(request)
-    if not current:
-        return RedirectResponse("/login", 303)
-
-    current_id = int(current)
-    body = body.strip()
-
-    if not body:
-        raise HTTPException(400, "Message cannot be empty")
-
-    if len(body) > 2000:
-        raise HTTPException(400, "Message is too long")
-
+    if not current: return RedirectResponse("/login?next=" + quote(f"/messages/{claim_id}", safe="/"), 303)
+    current_id = int(current); body = body.strip()
+    if not body: raise HTTPException(400, "Message cannot be empty")
+    if len(body) > 2000: raise HTTPException(400, "Message is too long")
     con = db()
-
-    claim = con.execute(
-        """
-        SELECT
-            c.id,
-            c.claimant_id,
-            c.status,
-            i.owner_id
-        FROM claims c
-        JOIN items i ON i.id = c.item_id
-        WHERE c.id = ?
-        """,
-        (claim_id,),
-    ).fetchone()
-
-    if not claim:
-        con.close()
-        raise HTTPException(404, "Claim not found")
-
-    if claim["status"] != "APPROVED":
-        con.close()
-        raise HTTPException(403, "Messaging is available only after approval")
-
-    if current_id not in (claim["owner_id"], claim["claimant_id"]):
-        con.close()
-        raise HTTPException(403, "You are not part of this conversation")
-
-    con.execute(
-        """
-        INSERT INTO messages(claim_id, sender_id, body)
-        VALUES (?, ?, ?)
-        """,
-        (claim_id, current_id, body),
-    )
-
-    con.commit()
-    con.close()
-
+    claim = con.execute("SELECT c.id,c.claimant_id,c.status,i.owner_id FROM claims c JOIN items i ON i.id=c.item_id WHERE c.id=?", (claim_id,)).fetchone()
+    if not claim: con.close(); raise HTTPException(404, "Claim not found")
+    if claim["status"] != "APPROVED" or current_id not in (claim["owner_id"], claim["claimant_id"]):
+        con.close(); raise HTTPException(403, "Not authorized")
+    con.execute("INSERT INTO messages(claim_id,sender_id,body) VALUES(?,?,?)", (claim_id,current_id,body)); con.commit(); con.close()
     return RedirectResponse(f"/messages/{claim_id}", 303)

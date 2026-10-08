@@ -1,129 +1,16 @@
-{% extends 'base.html' %}
-
+{% extends 'base.html' %}{% block title %}VITRecover — Campus Lost &amp; Found{% endblock %}
 {% block content %}
-
 <section class="hero">
-    <h1>Recover what belongs on campus.</h1>
-    <p>
-        VIT-specific lost & found with private ownership verification —
-        no public phone numbers or registration numbers.
-    </p>
+  <div class="eyebrow">🛡 Built for the VIT community</div>
+  <h1>Find what’s lost.<br><span>Return what’s found.</span></h1>
+  <p>A safer, simpler way for VITians to reunite with their belongings through private verification and trusted campus recovery.</p>
+  <form class="search" method="get" action="/">
+    <input name="q" value="{{ q }}" placeholder="Search headphones, ID card, keys...">
+    <button>Search campus</button>
+  </form>
 </section>
-
-{% if user %}
-<section class="card">
-    <h2>Report an item</h2>
-
-    <form method="post" action="/items">
-        <select name="kind">
-            <option value="LOST">LOST</option>
-            <option value="FOUND">FOUND</option>
-        </select>
-
-        <input
-            name="title"
-            placeholder="Item title"
-            required
-        >
-
-        <input
-            name="description"
-            placeholder="Description"
-            required
-        >
-
-        <select name="location">
-            {% for x in locations %}
-                <option value="{{ x }}">{{ x }}</option>
-            {% endfor %}
-        </select>
-
-        <select name="category">
-            {% for x in categories %}
-                <option value="{{ x }}">{{ x }}</option>
-            {% endfor %}
-        </select>
-
-        <input
-            name="challenge"
-            placeholder="Private verification question"
-            required
-        >
-
-        <input
-            name="answer"
-            placeholder="Expected answer (private)"
-            required
-        >
-
-        <button type="submit">Publish listing</button>
-    </form>
-</section>
-{% endif %}
-
-<h2>Active board</h2>
-
-<div class="grid">
-
-    {% for i in items %}
-
-    <article class="card">
-
-        <span class="pill">{{ i.kind }}</span>
-
-        {% if i.status == 'CLAIM_APPROVED' %}
-            <span class="pill">RECOVERY IN PROGRESS</span>
-        {% endif %}
-
-        <h3>{{ i.title }}</h3>
-
-        <p>{{ i.description }}</p>
-
-        <p>
-            <b>{{ i.category }}</b> · {{ i.location }}
-        </p>
-
-        {% if i.status == 'CLAIM_APPROVED' %}
-
-            <p>
-                <b>Recovery in progress.</b>
-                This item has been claimed and is awaiting handoff.
-            </p>
-
-        {% elif user and user.id != i.owner_id %}
-
-            <form method="post" action="/claim/{{ i.id }}">
-                <input
-                    name="response"
-                    placeholder="Answer: {{ i.challenge }}"
-                    required
-                >
-                <button type="submit">
-                    Submit private claim
-                </button>
-            </form>
-
-        {% elif not user %}
-
-            <small>Login to submit a claim.</small>
-
-        {% else %}
-
-            <small>
-                Your listing — finder identity remains private
-                to other students.
-            </small>
-
-        {% endif %}
-
-    </article>
-
-    {% else %}
-
-        <p>No active listings yet.</p>
-
-    {% endfor %}
-
-</div>
-
+<section class="section-head"><div><div class="eyebrow">Active board</div><h2>Recent lost &amp; found reports</h2></div><div class="actions"><a class="button secondary" href="/?kind=LOST">Lost</a><a class="button secondary" href="/?kind=FOUND">Found</a></div></section>
+<form class="filters" method="get"><input type="hidden" name="q" value="{{ q }}"><select name="kind"><option value="">All types</option><option value="LOST" {% if kind=='LOST' %}selected{% endif %}>Lost</option><option value="FOUND" {% if kind=='FOUND' %}selected{% endif %}>Found</option></select><select name="category"><option value="">All categories</option>{% for x in categories %}<option {% if category==x %}selected{% endif %}>{{x}}</option>{% endfor %}</select><select name="location"><option value="">All locations</option>{% for x in locations %}<option {% if location==x %}selected{% endif %}>{{x}}</option>{% endfor %}</select><button class="button secondary">Apply filters</button></form>
+<div class="grid">{% for i in items %}<article class="item-card"><div class="item-art {{ 'found' if i.kind=='FOUND' else 'lost' }}">{% if i.category=='Earphones' %}🎧{% elif i.category=='Wallets' %}👛{% elif i.category=='Room Keys' %}🔑{% elif i.category=='ID Cards' %}🪪{% elif i.category=='Calculators' %}🧮{% else %}📦{% endif %}</div><div class="item-body"><div class="row"><span class="badge {{i.kind|lower}}">{{i.kind}}</span>{% if i.status=='CLAIM_APPROVED' %}<span class="badge progress">RECOVERY IN PROGRESS</span>{% endif %}</div><h3>{{i.title}}</h3><p>{{i.description}}</p><div class="meta"><span>⌖ {{i.location}}</span><span>▦ {{i.reported_date or '—'}}</span></div><a class="button full" href="/items/{{i.id}}">View details <span>→</span></a></div></article>{% else %}<div class="empty"><h3>No matching reports</h3><p>Try another search or filter, or be the first to report an item.</p></div>{% endfor %}</div>
+{% if not user %}<section class="banner"><div><div class="eyebrow light">Help it get home</div><h2>Found something on campus?</h2><p>A quick report can make someone’s day. Keep sensitive details private and let the verification flow do the rest.</p></div><a class="button white" href="/register">Create a free account →</a></section>{% endif %}
 {% endblock %}
