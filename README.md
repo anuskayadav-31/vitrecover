@@ -1,16 +1,44 @@
-# VITRecover
+VITRecover
+WEB-01 — VIT Campus Lost & Found Recovery Portal
 
-WEB-01 — VIT Campus Lost & Found Recovery Portal.
+Features
+- Lost/found reporting
+- VIT campus locations and categories
+- Student registration/login
+- Private claim verification
+- Claim approval/rejection
+- Private recovery messaging
+- Resolved-item lifecycle
+- Search and filtering
 
-A FastAPI + Jinja2 + SQLite MVP with a polished VITRecover interface, public lost/found board, private ownership verification, authenticated claims, finder approval, private messaging, and recovery resolution.
+Tech Stack
+- FastAPI
+- Jinja2
+- SQLite
+- HTML/CSS
 
-## Run locally
+Local Setup
+1. python -m venv .venv
+2. .venv\Scripts\activate
+3. pip install -r requirements.txt
+4. uvicorn app.main:app --reload
+5. Open http://127.0.0.1:8000
 
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload
-```
+Database
+The SQLite database is created automatically by the application on first run.
+The local database file is excluded from Git using .gitignore.
 
-Open `http://127.0.0.1:8000`.
+Main Workflow
+Report → Browse → Claim → Private verification → Approve/Reject
+→ Private conversation → Resolve
+
+Privacy
+Public listings do not expose claimant verification answers or
+private recovery conversations.
+
+Repository Structure
+app/main.py
+templates/
+static/
+requirements.txt
+README.md
