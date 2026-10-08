@@ -1,0 +1,129 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<section class="hero">
+    <h1>Recover what belongs on campus.</h1>
+    <p>
+        VIT-specific lost & found with private ownership verification —
+        no public phone numbers or registration numbers.
+    </p>
+</section>
+
+{% if user %}
+<section class="card">
+    <h2>Report an item</h2>
+
+    <form method="post" action="/items">
+        <select name="kind">
+            <option value="LOST">LOST</option>
+            <option value="FOUND">FOUND</option>
+        </select>
+
+        <input
+            name="title"
+            placeholder="Item title"
+            required
+        >
+
+        <input
+            name="description"
+            placeholder="Description"
+            required
+        >
+
+        <select name="location">
+            {% for x in locations %}
+                <option value="{{ x }}">{{ x }}</option>
+            {% endfor %}
+        </select>
+
+        <select name="category">
+            {% for x in categories %}
+                <option value="{{ x }}">{{ x }}</option>
+            {% endfor %}
+        </select>
+
+        <input
+            name="challenge"
+            placeholder="Private verification question"
+            required
+        >
+
+        <input
+            name="answer"
+            placeholder="Expected answer (private)"
+            required
+        >
+
+        <button type="submit">Publish listing</button>
+    </form>
+</section>
+{% endif %}
+
+<h2>Active board</h2>
+
+<div class="grid">
+
+    {% for i in items %}
+
+    <article class="card">
+
+        <span class="pill">{{ i.kind }}</span>
+
+        {% if i.status == 'CLAIM_APPROVED' %}
+            <span class="pill">RECOVERY IN PROGRESS</span>
+        {% endif %}
+
+        <h3>{{ i.title }}</h3>
+
+        <p>{{ i.description }}</p>
+
+        <p>
+            <b>{{ i.category }}</b> · {{ i.location }}
+        </p>
+
+        {% if i.status == 'CLAIM_APPROVED' %}
+
+            <p>
+                <b>Recovery in progress.</b>
+                This item has been claimed and is awaiting handoff.
+            </p>
+
+        {% elif user and user.id != i.owner_id %}
+
+            <form method="post" action="/claim/{{ i.id }}">
+                <input
+                    name="response"
+                    placeholder="Answer: {{ i.challenge }}"
+                    required
+                >
+                <button type="submit">
+                    Submit private claim
+                </button>
+            </form>
+
+        {% elif not user %}
+
+            <small>Login to submit a claim.</small>
+
+        {% else %}
+
+            <small>
+                Your listing — finder identity remains private
+                to other students.
+            </small>
+
+        {% endif %}
+
+    </article>
+
+    {% else %}
+
+        <p>No active listings yet.</p>
+
+    {% endfor %}
+
+</div>
+
+{% endblock %}

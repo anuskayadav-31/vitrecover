@@ -1,0 +1,69 @@
+{% extends 'base.html' %}{% block content %}<h1>Private recovery dashboard</h1><h2>Your listings</h2><div class="grid">{% for i in own %}<article class="card"><h3>{{i.title}}</h3><p>Status: <b>{{i.status}}</b></p>{% if i.status != 'RESOLVED' %}<form method="post" action="/resolve/{{i.id}}"><button>Mark resolved</button></form>{% endif %}</article>{% endfor %}</div><h2>Claims awaiting your decision</h2>
+
+{% set pending_claims = claims | selectattr("status", "equalto", "PENDING") | list %}
+
+{% if pending_claims %}
+
+    {% for c in pending_claims %}
+
+    <article class="card">
+        <h3>{{ c.title }}</h3>
+
+        <p>Claim answer: {{ c.response }}</p>
+
+        <p>Your challenge: {{ c.challenge }}</p>
+
+        <p>
+            <b>Private:</b>
+            claimant identity is not shown publicly.
+        </p>
+
+        <form method="post" action="/claims/{{ c.id }}/APPROVED">
+            <button type="submit">Approve</button>
+        </form>
+
+        <form method="post" action="/claims/{{ c.id }}/REJECTED">
+            <button type="submit" class="danger">Reject</button>
+        </form>
+    </article>
+
+    {% endfor %}
+
+{% else %}
+
+    <p>No claims awaiting your decision.</p>
+
+{% endif %}
+
+
+<h2>Approved claims</h2>
+
+{% set approved_finder_claims = claims | selectattr("status", "equalto", "APPROVED") | list %}
+
+{% if approved_finder_claims %}
+
+    {% for c in approved_finder_claims %}
+
+    <article class="card">
+        <h3>{{ c.title }}</h3>
+
+        <p>
+            <b>Status:</b> Claim approved — recovery in progress.
+        </p>
+
+        <p>
+            The claimant can now communicate with you
+            through the private conversation.
+        </p>
+
+        <a href="/messages/{{ c.id }}">
+            <button type="button">Open private conversation</button>
+        </a>
+    </article>
+
+    {% endfor %}
+
+{% else %}
+
+    <p>No approved claims.</p>
+{% endif %}{% endblock %}
